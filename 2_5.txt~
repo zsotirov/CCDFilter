@@ -1,0 +1,225 @@
+/* 
+ * File:   main.cpp
+ * Author: linuxuser
+ *
+ * Created on August 12, 2014, 9:04 AM
+ */
+
+#include <cstdlib>
+#include <math.h>
+#include <time.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <iostream>
+#include <fstream>
+#include <string>
+
+using namespace std;
+
+/*
+ * 
+ */
+int ccd[5000];
+int ccdv[5000];
+int ccdc[5000];
+int ccdcc[5000];
+int ecpr = 5000;
+int eps = 500;
+    
+bool interpolateSegment (int* idx, int ccd[], int ccdc[], int ccdv[]) {
+    int i, j, k, l;
+    double d; 
+    
+    i = *idx;
+    while (ccdv[i] != 1 || ccdv[i + 1] != 0) {
+        if ((i == ecpr - 2) && (ccdv[i + 1] == 1))
+            return true; 
+        i++;
+    }
+    int baseIdx = i;
+    k = 1;
+    i = baseIdx + 1;
+    l = i;
+    while (ccdv[l] == 0) {
+        k++;
+        i++;
+        l = i;
+        if (i >= ecpr) {
+            l = i - ecpr; 
+        }
+    }
+    d = ((double) (ccd[l] - ccd[i - k])) / k;
+    for (j = 0; j <= k; j++) {
+        int n = baseIdx + j;
+        if (n >= ecpr) {
+            n = n - ecpr;
+        }
+        ccdc[n] = (int)((double) ccd[baseIdx] + j * d);
+    }
+    *idx = i;
+    return false;
+}
+
+//
+// CCD filter
+//
+
+int validateCCDSample (int ccd[], int i, int ecpr, int eps) {
+
+    int n = ecpr / 4;
+    int i2, i3, i4; 
+    long err, err12, err13, err14;
+    
+    //
+    // Calculate and normalize indexes
+    // 
+    i2 = i + n; 
+    if (i2 >= ecpr) 
+       i2 = i2 - ecpr; 
+    i3 = i + 2 * n; 
+    if (i3 >= ecpr) 
+       i3 = i3 - ecpr; 
+    i4 = i + 3 * n; 
+    if (i4 >= ecpr) 
+       i4 = i4 - ecpr; 
+
+    err12 = labs (ccd[i] - ccd[i2]);
+    err13 = labs (ccd[i] - ccd[i3]);
+    err14 = labs (ccd[i] - ccd[i4]);
+
+    //
+    // Validate the CCD-sample
+    //
+    err = labs (ccd[i2] - ccd[i3]);
+    if ((err < eps) && (err12 < eps || err13 < eps)) {
+        return 1; 
+    }
+
+    err = labs (ccd[i2] - ccd[i4]);
+    if ((err < eps) && (err12 < eps || err14 < eps)) {
+        return 1; 
+    }
+
+    err = labs (ccd[i3] - ccd[i4]);
+    if ((err < eps) && (err13 < eps || err14 < eps)) {
+        return 1; 
+    }
+    return 0;
+}
+
+int validateCCDSampleNew (int ccd[], int i, int ecpr, int eps) {
+
+    int n = ecpr / 4;
+    int i2, i3, i4; 
+    long delta = 500;
+    
+    //
+    // Calculate and normalize indexes
+    // 
+    i2 = i + n; 
+    if (i2 >= ecpr) 
+       i2 = i2 - ecpr; 
+    i3 = i + 2 * n; 
+    if (i3 >= ecpr) 
+       i3 = i3 - ecpr; 
+    i4 = i + 3 * n; 
+    if (i4 >= ecpr) 
+       i4 = i4 - ecpr; 
+    //
+    // Validate the CCD-sample
+    //
+    
+    if (ccd[i] < delta || ccd[i] > 3600 - delta) { 
+        if ((ccd[i2] > delta && ccd[i2] < 3600 - delta) ||
+            (ccd[i3] > delta && ccd[i3] < 3600 - delta) ||
+            (ccd[i4] > delta && ccd[i4] < 3600 - delta))
+            return 0;
+    } 
+    return 1;
+}
+
+int main (int argc, char** argv) {
+
+    int baseIdx;
+    int baseCCD; 
+    int i, j, k;
+    double d;
+    FILE* fp;
+    int ccdv_old;
+    string line;
+    double r[3];
+            
+    ifstream myfile ("ccd5.txt"); 
+
+    int noCols;
+    char sBuff[20];
+    i = 0; 
+    if (myfile.is_open())
+    {
+        while (myfile.good()) {
+            getline (myfile, line);
+            double temp = atof (line.c_str());
+            if (temp == 0.0)
+                temp = 3600.0;
+            ccd[i++] = temp;
+        }
+    }
+    myfile.close ();
+        
+    for (i = 0; i < ecpr; i++) {
+        ccdv[i] = validateCCDSampleNew (ccd, i, ecpr, eps);
+        if (ccdv[i] == 1)
+            ccdc[i] = ccd[i];
+    }
+ 
+    k = 0;
+    i = 0; 
+    while (ccdv[i] != 1) {
+        i++;
+    }
+    k = i; 
+        
+    bool isEnd = false;  
+    while (i < (ecpr + k) && !isEnd) {
+        isEnd = interpolateSegment (&i, ccd, ccdc, ccdv);
+    }
+    
+    long avg;
+    for (i = 0; i < 6; i++) {
+        ccdv[i] = 1;
+    }
+    for (i = 6; i < ecpr; i++) {
+        avg = 0; 
+        for (k = 1; k < 6; k++)
+            avg += ccdc[i-k];
+        avg = avg / 5;
+        int err = ccdc[i] - avg;
+        if (err < 0)
+            err = -err;
+        if (err > 100)
+            ccdv[i] = 0; 
+        else 
+            ccdv[i] = 1;
+    }
+     
+    k = 0;
+    i = 0; 
+    while (ccdv[i] != 1) {
+        i++;
+    }
+    k = i; 
+        
+    isEnd = false;  
+    while (i < (ecpr + k) && !isEnd) {
+        isEnd = interpolateSegment (&i, ccd, ccdcc, ccdv);
+    }
+        
+    fp = fopen ("ccd5c.txt", "w");
+    for (i = 0; i < ecpr; i++) {
+        fprintf (fp, "%d %d %d %d\n", ccdv[i], ccd[i], ccdc[i], ccdcc[i]);
+    }
+    fclose (fp);
+    return 0; 
+        
+}
+
